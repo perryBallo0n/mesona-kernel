@@ -269,125 +269,10 @@ static void msm_cam_stop_hardware(struct msm_cam_v4l2_device *pcam)
 static int msm_server_control(struct msm_cam_server_dev *server_dev,
 				struct msm_ctrl_cmd *out)
 {
-	int rc = 0;
-	void *value;
-	struct msm_queue_cmd *rcmd;
-	struct msm_queue_cmd *event_qcmd;
-	struct msm_ctrl_cmd *ctrlcmd;
-	struct msm_device_queue *queue =
-		&server_dev->server_queue[out->queue_idx].ctrl_q;
-	struct msm_cam_v4l2_device *pcam = server_dev->pcam_active;
-
-	struct v4l2_event v4l2_evt;
-	struct msm_isp_event_ctrl *isp_event;
-	void *ctrlcmd_data;
-
-	event_qcmd = kzalloc(sizeof(struct msm_queue_cmd), GFP_KERNEL);
-	if (!event_qcmd) {
-		pr_err("%s Insufficient memory. return", __func__);
-		rc = -ENOMEM;
-		goto event_qcmd_alloc_fail;
-	}
-
-	isp_event = kzalloc(sizeof(struct msm_isp_event_ctrl), GFP_KERNEL);
-	if (!isp_event) {
-		pr_err("%s Insufficient memory. return", __func__);
-		rc = -ENOMEM;
-		goto isp_event_alloc_fail;
-	}
-
-	D("%s\n", __func__);
-	mutex_lock(&server_dev->server_queue_lock);
-	if (++server_dev->server_evt_id == 0)
-		server_dev->server_evt_id++;
-	D("%s qid %d evtid %d\n", __func__, out->queue_idx,
-		server_dev->server_evt_id);
-
-	server_dev->server_queue[out->queue_idx].evt_id =
-		server_dev->server_evt_id;
-	v4l2_evt.type = V4L2_EVENT_PRIVATE_START + MSM_CAM_RESP_V4L2;
-	v4l2_evt.id = 0;
-	v4l2_evt.u.data[0] = out->queue_idx;
-	/* setup event object to transfer the command; */
-	isp_event->resptype = MSM_CAM_RESP_V4L2;
-	isp_event->isp_data.ctrl = *out;
-	isp_event->isp_data.ctrl.evt_id = server_dev->server_evt_id;
-
-	if (out->value != NULL && out->length != 0) {
-		ctrlcmd_data = kzalloc(out->length, GFP_KERNEL);
-		if (!ctrlcmd_data) {
-			rc = -ENOMEM;
-			goto ctrlcmd_alloc_fail;
-		}
-		memcpy(ctrlcmd_data, out->value, out->length);
-		isp_event->isp_data.ctrl.value = ctrlcmd_data;
-	}
-
-	atomic_set(&event_qcmd->on_heap, 1);
-	event_qcmd->command = isp_event;
-
-	msm_enqueue(&server_dev->server_queue[out->queue_idx].eventData_q,
-				&event_qcmd->list_eventdata);
-
-	/* now send command to config thread in userspace,
-	 * and wait for results */
-	v4l2_event_queue(server_dev->server_command_queue.pvdev,
-					  &v4l2_evt);
-	D("%s v4l2_event_queue: type = 0x%x\n", __func__, v4l2_evt.type);
-	mutex_unlock(&server_dev->server_queue_lock);
-
-	/* wait for config return status */
-	D("Waiting for config status\n");
-	rc = wait_event_interruptible_timeout(queue->wait,
-		!list_empty_careful(&queue->list),
-		msecs_to_jiffies(out->timeout_ms));
-	D("Waiting is over for config status\n");
-	if (list_empty_careful(&queue->list)) {
-		if (!rc)
-			rc = -ETIMEDOUT;
-		if (rc < 0) {
-			if (++server_dev->server_evt_id == 0)
-				server_dev->server_evt_id++;
-			pr_err("%s: wait_event error %d\n", __func__, rc);
-			msm_cam_stop_hardware(pcam);
-			return rc;
-		}
-	}
-
-	rcmd = msm_dequeue(queue, list_control);
-	BUG_ON(!rcmd);
-	D("%s Finished servicing ioctl\n", __func__);
-
-	ctrlcmd = (struct msm_ctrl_cmd *)(rcmd->command);
-	value = out->value;
-	if (ctrlcmd->length > 0 && value != NULL &&
-	    ctrlcmd->length <= out->length)
-		memcpy(value, ctrlcmd->value, ctrlcmd->length);
-
-	memcpy(out, ctrlcmd, sizeof(struct msm_ctrl_cmd));
-	out->value = value;
-
-	kfree(ctrlcmd);
-	free_qcmd(rcmd);
-	D("%s: rc %d\n", __func__, rc);
-	/* rc is the time elapsed. */
-	if (rc >= 0) {
-		/* TODO: Refactor msm_ctrl_cmd::status field */
-		if (out->status == 0)
-			rc = -1;
-		else if (out->status == 1 || out->status == 4)
-			rc = 0;
-		else
-			rc = -EINVAL;
-	}
-	return rc;
-
-ctrlcmd_alloc_fail:
-	kfree(isp_event);
-isp_event_alloc_fail:
-	kfree(event_qcmd);
-event_qcmd_alloc_fail:
-	return rc;
+	/* MSM7227A does not use mm-qcamera-daemon */
+	if (out)
+		out->status = 1;
+	return 0;
 }
 
 /*send open command to server*/
@@ -440,12 +325,16 @@ static int msm_server_set_fmt(struct msm_cam_v4l2_device *pcam, int idx,
 	struct msm_ctrl_cmd ctrlcmd;
 	struct img_plane_info plane_info;
 
+	memset(&plane_info, 0, sizeof(plane_info));
 	plane_info.width = pix->width;
 	plane_info.height = pix->height;
 	plane_info.pixelformat = pix->pixelformat;
 	plane_info.buffer_type = pfmt->type;
 	plane_info.ext_mode = pcam->dev_inst[idx]->image_mode;
 	plane_info.num_planes = 1;
+	plane_info.sp_y_offset = 0;
+	plane_info.plane[0].offset = pix->width * pix->height;
+	plane_info.plane[0].size = PAGE_ALIGN(pix->width * pix->height * 3 / 2);
 	D("%s: %d, %d, 0x%x\n", __func__,
 		pfmt->fmt.pix.width, pfmt->fmt.pix.height,
 		pfmt->fmt.pix.pixelformat);
@@ -1739,123 +1628,10 @@ int msm_server_open_client(int *p_qidx)
 int msm_server_send_ctrl(struct msm_ctrl_cmd *out,
 	int ctrl_id)
 {
-	int rc = 0;
-	void *value;
-	struct msm_queue_cmd *rcmd;
-	struct msm_queue_cmd *event_qcmd;
-	struct msm_ctrl_cmd *ctrlcmd;
-	struct msm_cam_server_dev *server_dev = &g_server_dev;
-	struct msm_device_queue *queue =
-		&server_dev->server_queue[out->queue_idx].ctrl_q;
-
-	struct v4l2_event v4l2_evt;
-	struct msm_isp_event_ctrl *isp_event;
-	void *ctrlcmd_data;
-
-	event_qcmd = kzalloc(sizeof(struct msm_queue_cmd), GFP_KERNEL);
-	if (!event_qcmd) {
-		pr_err("%s Insufficient memory. return", __func__);
-		rc = -ENOMEM;
-		goto event_qcmd_alloc_fail;
-	}
-
-	isp_event = kzalloc(sizeof(struct msm_isp_event_ctrl), GFP_KERNEL);
-	if (!isp_event) {
-		pr_err("%s Insufficient memory. return", __func__);
-		rc = -ENOMEM;
-		goto isp_event_alloc_fail;
-	}
-
-	D("%s\n", __func__);
-	mutex_lock(&server_dev->server_queue_lock);
-	if (++server_dev->server_evt_id == 0)
-		server_dev->server_evt_id++;
-
-	D("%s qid %d evtid %d\n", __func__, out->queue_idx,
-		server_dev->server_evt_id);
-	server_dev->server_queue[out->queue_idx].evt_id =
-		server_dev->server_evt_id;
-	v4l2_evt.type = V4L2_EVENT_PRIVATE_START + ctrl_id;
-	v4l2_evt.u.data[0] = out->queue_idx;
-	/* setup event object to transfer the command; */
-	isp_event->resptype = MSM_CAM_RESP_V4L2;
-	isp_event->isp_data.ctrl = *out;
-	isp_event->isp_data.ctrl.evt_id = server_dev->server_evt_id;
-
-	if (out->value != NULL && out->length != 0) {
-		ctrlcmd_data = kzalloc(out->length, GFP_KERNEL);
-		if (!ctrlcmd_data) {
-			rc = -ENOMEM;
-			goto ctrlcmd_alloc_fail;
-		}
-		memcpy(ctrlcmd_data, out->value, out->length);
-		isp_event->isp_data.ctrl.value = ctrlcmd_data;
-	}
-
-	atomic_set(&event_qcmd->on_heap, 1);
-	event_qcmd->command = isp_event;
-
-	msm_enqueue(&server_dev->server_queue[out->queue_idx].eventData_q,
-				&event_qcmd->list_eventdata);
-
-	/* now send command to config thread in userspace,
-	 * and wait for results */
-	v4l2_event_queue(server_dev->server_command_queue.pvdev,
-					  &v4l2_evt);
-	D("%s v4l2_event_queue: type = 0x%x\n", __func__, v4l2_evt.type);
-	mutex_unlock(&server_dev->server_queue_lock);
-
-	/* wait for config return status */
-	D("Waiting for config status\n");
-	rc = wait_event_interruptible_timeout(queue->wait,
-		!list_empty_careful(&queue->list),
-		msecs_to_jiffies(out->timeout_ms));
-	D("Waiting is over for config status\n");
-	if (list_empty_careful(&queue->list)) {
-		if (!rc)
-			rc = -ETIMEDOUT;
-		if (rc < 0) {
-			if (++server_dev->server_evt_id == 0)
-				server_dev->server_evt_id++;
-			pr_err("%s: wait_event error %d\n", __func__, rc);
-			return rc;
-		}
-	}
-
-	rcmd = msm_dequeue(queue, list_control);
-	BUG_ON(!rcmd);
-	D("%s Finished servicing ioctl\n", __func__);
-
-	ctrlcmd = (struct msm_ctrl_cmd *)(rcmd->command);
-	value = out->value;
-	if (ctrlcmd->length > 0 && value != NULL &&
-	    ctrlcmd->length <= out->length)
-		memcpy(value, ctrlcmd->value, ctrlcmd->length);
-
-	memcpy(out, ctrlcmd, sizeof(struct msm_ctrl_cmd));
-	out->value = value;
-
-	kfree(ctrlcmd);
-	free_qcmd(rcmd);
-	D("%s: rc %d\n", __func__, rc);
-	/* rc is the time elapsed. */
-	if (rc >= 0) {
-		/* TODO: Refactor msm_ctrl_cmd::status field */
-		if (out->status == 0)
-			rc = -1;
-		else if (out->status == 1 || out->status == 4)
-			rc = 0;
-		else
-			rc = -EINVAL;
-	}
-	return rc;
-
-ctrlcmd_alloc_fail:
-	kfree(isp_event);
-isp_event_alloc_fail:
-	kfree(event_qcmd);
-event_qcmd_alloc_fail:
-	return rc;
+	/* MSM7227A does not use mm-qcamera-daemon */
+	if (out)
+		out->status = 1;
+	return 0;
 }
 
 int msm_server_close_client(int idx)

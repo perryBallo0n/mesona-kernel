@@ -52,13 +52,23 @@ static int msm_vb2_ops_queue_setup(struct vb2_queue *vq,
 		return -EINVAL;
 	}
 
-	*num_planes = pcam_inst->plane_info.num_planes;
-	for (i = 0; i < pcam_inst->vid_fmt.fmt.pix_mp.num_planes; i++) {
-		sizes[i] = pcam_inst->plane_info.plane[i].size;
-		D("%s Inst %p : Plane %d Offset = %d Size = %ld" \
-			"Aligned Size = %d\n", __func__, pcam_inst, i,
-			pcam_inst->plane_info.plane[i].offset,
-			pcam_inst->plane_info.plane[i].size, sizes[i]);
+	if (pcam_inst->vid_fmt.type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		*num_planes = pcam_inst->plane_info.num_planes;
+		for (i = 0; i < pcam_inst->vid_fmt.fmt.pix_mp.num_planes; i++) {
+			sizes[i] = pcam_inst->plane_info.plane[i].size;
+			D("%s Inst %p : Plane %d Offset = %d Size = %ld" \
+				"Aligned Size = %d\n", __func__, pcam_inst, i,
+				pcam_inst->plane_info.plane[i].offset,
+				pcam_inst->plane_info.plane[i].size, sizes[i]);
+		}
+	} else {
+		*num_planes = 1;
+		sizes[0] = pcam_inst->plane_info.plane[0].size;
+		if (sizes[0] == 0) {
+			sizes[0] = PAGE_ALIGN(pcam_inst->vid_fmt.fmt.pix.width *
+				pcam_inst->vid_fmt.fmt.pix.height * 3 / 2);
+		}
+		D("%s Inst %p : Single-plane Size = %d\n", __func__, pcam_inst, sizes[0]);
 	}
 	return 0;
 }

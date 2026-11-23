@@ -70,7 +70,7 @@
 //>>Skies-2012/10/16, implement ram console in JB
 
 
-#define PMEM_KERNEL_EBI1_SIZE	0x3A000
+#define PMEM_KERNEL_EBI1_SIZE	0x800000
 //20130114-JordanChen , Reduce it due to Nanhu doesn't support LPA
 /*#define MSM_PMEM_AUDIO_SIZE	0x1F4000*/
 #define MSM_PMEM_AUDIO_SIZE	0x5B000

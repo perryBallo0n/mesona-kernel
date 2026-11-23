@@ -99,7 +99,7 @@ extern void fih_info_init(void);
 #include <linux/qpdss702.h>
 #endif
 /* FIH-SW2-PERIPHERAL-FG-SENSOR-00+] */
-#define PMEM_KERNEL_EBI1_SIZE	0x3A000
+#define PMEM_KERNEL_EBI1_SIZE	0x800000
 #define MSM_PMEM_AUDIO_SIZE	0x1F4000
 
 #if defined(CONFIG_GPIO_SX150X)
