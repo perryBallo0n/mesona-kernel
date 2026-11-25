@@ -1204,6 +1204,8 @@ out:
  * to translate in-kernel semantics to zcache semantics.
  */
 
+static int qcache_cleancache_enabled;
+
 static void zcache_cleancache_put_page(int pool_id,
 					struct cleancache_filekey key,
 					pgoff_t index, struct page *page)
@@ -1211,6 +1213,8 @@ static void zcache_cleancache_put_page(int pool_id,
 	u32 ind = (u32) index;
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 
+	if (!qcache_cleancache_enabled)
+		return;
 	if (likely(ind == index))
 		(void)zcache_put_page(LOCAL_CLIENT, pool_id, &oid, index, page);
 }
@@ -1223,6 +1227,8 @@ static int zcache_cleancache_get_page(int pool_id,
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	int ret = -1;
 
+	if (!qcache_cleancache_enabled)
+		return -1;
 	if (likely(ind == index))
 		ret = zcache_get_page(LOCAL_CLIENT, pool_id, &oid, index, page);
 	return ret;
@@ -1258,6 +1264,8 @@ static int zcache_cleancache_init_fs(size_t pagesize)
 	BUG_ON(sizeof(struct cleancache_filekey) !=
 				sizeof(struct tmem_oid));
 	BUG_ON(pagesize != PAGE_SIZE);
+	if (!qcache_cleancache_enabled)
+		return -1;
 	return zcache_new_pool(LOCAL_CLIENT, 0);
 }
 
@@ -1267,6 +1275,8 @@ static int zcache_cleancache_init_shared_fs(char *uuid, size_t pagesize)
 	BUG_ON(sizeof(struct cleancache_filekey) !=
 				sizeof(struct tmem_oid));
 	BUG_ON(pagesize != PAGE_SIZE);
+	if (!qcache_cleancache_enabled)
+		return -1;
 	return zcache_new_pool(LOCAL_CLIENT, 0);
 }
 
