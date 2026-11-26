@@ -106,6 +106,8 @@ static atomic_t open_count = ATOMIC_INIT(1);
  * Local function prototypes
  */
 
+static int bluesleep_start(void);
+static void bluesleep_stop(void);
 static int bluesleep_hci_event(struct notifier_block *this,
 			    unsigned long event, void *data);
 
@@ -139,6 +141,9 @@ struct proc_dir_entry *bluetooth_dir, *sleep_dir;
 
 static void hsuart_power(int on)
 {
+	if (!bsi || !bsi->uport)
+		return;
+
 	g_uart_power = on; //MTD-Conn-JC-BluesleepFix-00++
 
 	if (on) {
@@ -288,12 +293,24 @@ static int bluesleep_hci_event(struct notifier_block *this,
 			bluesleep_hdev = hdev;
 			hu  = (struct hci_uart *) hdev->driver_data;
 			state = (struct uart_state *) hu->tty->driver_data;
-			bsi->uport = state->uart_port;
+			if (bsi)
+				bsi->uport = state->uart_port;
 		}
 		break;
+	case HCI_DEV_UP:
+		if (bsi && bsi->uport && !test_bit(BT_PROTO, &flags))
+			bluesleep_start();
+		break;
+	case HCI_DEV_DOWN:
+		if (test_bit(BT_PROTO, &flags))
+			bluesleep_stop();
+		break;
 	case HCI_DEV_UNREG:
+		if (test_bit(BT_PROTO, &flags))
+			bluesleep_stop();
 		bluesleep_hdev = NULL;
-		bsi->uport = NULL;
+		if (bsi)
+			bsi->uport = NULL;
 		break;
 	case HCI_DEV_WRITE:
 		bluesleep_outgoing_data();
@@ -437,14 +454,15 @@ static void bluesleep_stop(void)
 	del_timer(&tx_timer);
 	clear_bit(BT_PROTO, &flags);
 
-	if (test_bit(BT_ASLEEP, &flags)) {
-		clear_bit(BT_ASLEEP, &flags);
-		hsuart_power(1);
+	{
+		int need_wake = test_and_clear_bit(BT_ASLEEP, &flags);
+
+		atomic_inc(&open_count);
+
+		spin_unlock_irqrestore(&rw_lock, irq_flags);
+		if (need_wake)
+			hsuart_power(1);
 	}
-
-	atomic_inc(&open_count);
-
-	spin_unlock_irqrestore(&rw_lock, irq_flags);
 	if (disable_irq_wake(bsi->host_wake_irq))
 		BT_ERR("Couldn't disable hostwake IRQ wakeup mode\n");
 	free_irq(bsi->host_wake_irq, NULL);

@@ -1755,10 +1755,25 @@ dhd_watchdog_thread(void *data)
 					if (ipend || cur_pkts != last_pkts || dhd->pub.busstate != DHD_BUS_DATA) {
 						last_pkts = cur_pkts;
 						idle_polls = 0;
-					} else if (idle_polls < 15) {
-						idle_polls++;
+						if (dhd->pub.in_suspend)
+							next_ms = 25;
+					} else if (dhd->pub.in_suspend) {
+						if (idle_polls < 2) {
+							idle_polls++;
+							next_ms = 50;
+						} else if (idle_polls < 6) {
+							idle_polls++;
+							next_ms = 250;
+						} else {
+							next_ms = 750;
+						}
 					} else {
-						next_ms = dhd->pub.in_suspend ? 500 : 100;
+						if (idle_polls < 5) {
+							idle_polls++;
+							next_ms = 20;
+						} else {
+							next_ms = 100;
+						}
 					}
 
 					flags = dhd_os_spin_lock(&dhd->pub);

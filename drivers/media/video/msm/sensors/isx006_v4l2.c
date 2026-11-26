@@ -30,7 +30,8 @@
 #define isx006_LSB_MASK            0x00FF
 
 /*MTD-MM-SL-ImproveMainCamera-00+{ */
-#define ISX006_ENABLE_HW_STANDBY 1
+#define ISX006_ENABLE_HW_STANDBY 0
+static bool isx006_powered = false;
 /*MTD-MM-SL-ImproveMainCamera-00+} */
 
 #define cam_msleep msleep
@@ -1421,7 +1422,11 @@ int isx006_regulator_enable(struct device *dev, const char *id, int voltage, con
 {
     int rc = 0;
     pr_err("%s: id =  %s\n", __func__, id);
-	
+
+	if (!IS_ERR_OR_NULL(regulator)) {
+		regulator_put(regulator);
+		regulator = NULL;
+	}
 	// Voting for Regulator 
 	regulator = regulator_get(dev, id);
 	if (IS_ERR(regulator)) {
@@ -1458,9 +1463,11 @@ out:
 int isx006_regulator_disable(struct device *dev, const char *id, const char *tag)
 {
     int rc = 0;
-    
-    regulator_put(regulator);
-    regulator = NULL;
+
+    if (!IS_ERR_OR_NULL(regulator)) {
+        regulator_put(regulator);
+        regulator = NULL;
+    }
 		
 	/* Voting for 1.8V Regulator */
 	regulator = regulator_get(dev, id);
@@ -1910,10 +1917,12 @@ done:
 		pr_err("isx006_sensor_power_up: AF power enable failed !\n");
 		goto error;
     }	
+	isx006_powered = true;
 	printk("isx006_sensor_power_up: Success.\n");
 	return rc;
 
 error:
+	isx006_powered = false;
 	STARTUP = 0;
 	F_STARTUP = 0;
 	pr_err("isx006_sensor_power_up: failed !, rc = %d.\n", rc);
@@ -1962,6 +1971,8 @@ done:
 	
 	AF_skip = false;
 	csi_config = 0;
+	s_ctrl->curr_res = MSM_SENSOR_INVALID_RES;
+	isx006_powered = false;
 	
 	printk("isx006_sensor_power_down: End. \n");  
 	return rc;
@@ -1970,6 +1981,9 @@ error:
     pr_err("isx006_sensor_power_down: failed ! rc = %d.\n", rc);
 	/* AF_power off */
 	rc = isx006_regulator_disable(&s_ctrl->sensor_i2c_client->client->dev ,"bt", "isx006_AF");
+	csi_config = 0;
+	s_ctrl->curr_res = MSM_SENSOR_INVALID_RES;
+	isx006_powered = false;
 	STARTUP = 0;
 	F_STARTUP = 0;
 	return rc;
@@ -1983,7 +1997,10 @@ error:
 int isx006_suspend(struct i2c_client *client, pm_message_t state)
 {
     int rc = 0;
-    
+
+    if (!isx006_powered || !s_ctrl_m)
+        return 0;
+
     printk("isx006_suspend \n");
 
     rc = fih_enable_mclk(s_ctrl_m);
