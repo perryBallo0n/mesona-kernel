@@ -24,6 +24,14 @@
 #include <linux/slab.h>
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>
+
+#ifdef CONFIG_ARM
+#define zs_set_pte(ptep, pte) set_pte_ext((ptep), (pte), 0)
+#define zs_flush_tlb_one(addr) local_flush_tlb_kernel_page(addr)
+#else
+#define zs_set_pte(ptep, pte) set_pte((ptep), (pte))
+#define zs_flush_tlb_one(addr) zs_flush_tlb_one(addr)
+#endif
 #include <linux/cpumask.h>
 #include <linux/cpu.h>
 #include <linux/vmalloc.h>
@@ -697,10 +705,12 @@ void *zs_map_object(struct zs_pool *pool, void *handle)
 		BUG_ON(!nextp);
 
 
-		set_pte(area->vm_ptes[0], mk_pte(page, PAGE_KERNEL));
-		set_pte(area->vm_ptes[1], mk_pte(nextp, PAGE_KERNEL));
+		zs_set_pte(area->vm_ptes[0], mk_pte(page, PAGE_KERNEL));
+		zs_set_pte(area->vm_ptes[1], mk_pte(nextp, PAGE_KERNEL));
 
 		/* We pre-allocated VM area so mapping can never fail */
+		zs_flush_tlb_one((unsigned long)area->vm->addr);
+		zs_flush_tlb_one((unsigned long)area->vm->addr + PAGE_SIZE);
 		area->vm_addr = area->vm->addr;
 	}
 
@@ -729,10 +739,10 @@ void zs_unmap_object(struct zs_pool *pool, void *handle)
 	if (off + class->size <= PAGE_SIZE) {
 		kunmap_atomic(area->vm_addr);
 	} else {
-		set_pte(area->vm_ptes[0], __pte(0));
-		set_pte(area->vm_ptes[1], __pte(0));
-		__flush_tlb_one((unsigned long)area->vm_addr);
-		__flush_tlb_one((unsigned long)area->vm_addr + PAGE_SIZE);
+		zs_set_pte(area->vm_ptes[0], __pte(0));
+		zs_set_pte(area->vm_ptes[1], __pte(0));
+		zs_flush_tlb_one((unsigned long)area->vm_addr);
+		zs_flush_tlb_one((unsigned long)area->vm_addr + PAGE_SIZE);
 	}
 	put_cpu_var(zs_map_area);
 }

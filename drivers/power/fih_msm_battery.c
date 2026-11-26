@@ -720,7 +720,7 @@ void msm_batt_update_psy_status(void)
 			msm_batt_info.current_chg_source = AC_CHG;
 			supp = &msm_psy_ac;
 			bq27520_change_polling_timeout(BATT_POLLING_STATUS_CHARGING);
-			wake_lock(&msm_battery_ac_wakelock); 
+			wake_lock_timeout(&msm_battery_ac_wakelock, 5 * HZ);
 		} else {
 			if (msm_batt_info.current_chg_source & AC_CHG)
 				DBG_LIMIT("BATT: AC Wall charger removed\n");

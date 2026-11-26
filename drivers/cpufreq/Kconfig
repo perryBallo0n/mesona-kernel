@@ -166,6 +166,12 @@ config CPU_FREQ_GOV_ONDEMAND
 
 	  If in doubt, say N.
 
+config CPU_FREQ_GOV_SMARTASS2
+	tristate "'smartassV2' cpufreq policy governor"
+	depends on CPU_FREQ && EARLYSUSPEND
+	help
+	  'smartassV2' - SmartassV2 dynamic cpufreq governor with screen-off scaling.
+
 config CPU_FREQ_GOV_INTERACTIVE
 	tristate "'interactive' cpufreq policy governor"
 	help
