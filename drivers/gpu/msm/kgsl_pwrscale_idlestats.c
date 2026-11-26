@@ -119,9 +119,17 @@ static void idlestats_busy(struct kgsl_device *device,
 
 		/* If total_time is zero, then we don't have
 		   any interesting statistics to store */
-		if (stats.total_time == 0) {
+		if (stats.total_time <= 0) {
 			priv->pulse.busy_start_time = 0;
 			return;
+		}
+
+		/* Lightweight in-kernel dynamic GPU scaling between level 1 (192 MHz) and turbo (245 MHz) */
+		if (stats.busy_time >= 0) {
+			if ((u64)stats.busy_time * 100 >= (u64)stats.total_time * 70)
+				kgsl_pwrctrl_pwrlevel_change(device, KGSL_PWRLEVEL_TURBO);
+			else if ((u64)stats.busy_time * 100 <= (u64)stats.total_time * 30)
+				kgsl_pwrctrl_pwrlevel_change(device, device->pwrctrl.default_pwrlevel);
 		}
 
 		priv->pulse.busy_interval = stats.busy_time;
@@ -157,9 +165,8 @@ static void idlestats_sleep(struct kgsl_device *device,
 static void idlestats_wake(struct kgsl_device *device,
 			struct kgsl_pwrscale *pwrscale)
 {
-	/* Use highest perf level on wake-up from
-	   sleep for better performance */
-	kgsl_pwrctrl_pwrlevel_change(device, KGSL_PWRLEVEL_TURBO);
+	/* Start at balanced default level (192 MHz); boost dynamically if busy >= 70% */
+	kgsl_pwrctrl_pwrlevel_change(device, device->pwrctrl.default_pwrlevel);
 }
 
 static int idlestats_init(struct kgsl_device *device,

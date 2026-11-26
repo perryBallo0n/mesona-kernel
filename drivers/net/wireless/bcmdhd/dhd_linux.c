@@ -397,9 +397,9 @@ int dhd_ioctl_timeout_msec = IOCTL_RESP_TIMEOUT;
 int dhd_idletime = DHD_IDLETIME_TICKS;
 module_param(dhd_idletime, int, 0);
 
-/* Use polling */
+/* Use polling (with adaptive idle/suspend backoff in watchdog) */
 uint dhd_poll = TRUE;
-module_param(dhd_poll, uint, 0);
+module_param(dhd_poll, uint, 0644);
 
 /* Use interrupts */
 uint dhd_intr = TRUE;
@@ -1739,23 +1739,39 @@ dhd_watchdog_thread(void *data)
 				break;
 			}
 
-			dhd_os_sdlock(&dhd->pub);
-			if (dhd->pub.dongle_reset == FALSE) {
-				DHD_TIMER(("%s:\n", __FUNCTION__));
+			{
+				static unsigned long last_pkts = 0;
+				static uint idle_polls = 0;
+				dhd_os_sdlock(&dhd->pub);
+				if (dhd->pub.dongle_reset == FALSE) {
+					bool ipend;
+					unsigned long cur_pkts;
+					uint next_ms = dhd_watchdog_ms;
+					DHD_TIMER(("%s:\n", __FUNCTION__));
 
-				/* Call the bus module watchdog */
-				dhd_bus_watchdog(&dhd->pub);
+					/* Call the bus module watchdog */
+					ipend = dhd_bus_watchdog(&dhd->pub);
+					cur_pkts = dhd->pub.rx_packets + dhd->pub.tx_packets + dhd->pub.rx_ctlpkts + dhd->pub.tx_ctlpkts;
+					if (ipend || cur_pkts != last_pkts || dhd->pub.busstate != DHD_BUS_DATA) {
+						last_pkts = cur_pkts;
+						idle_polls = 0;
+					} else if (idle_polls < 15) {
+						idle_polls++;
+					} else {
+						next_ms = dhd->pub.in_suspend ? 500 : 100;
+					}
 
-				flags = dhd_os_spin_lock(&dhd->pub);
-				/* Count the tick for reference */
-				dhd->pub.tickcnt++;
-				/* Reschedule the watchdog */
-				if (dhd->wd_timer_valid)
-					mod_timer(&dhd->timer,
-					jiffies + dhd_watchdog_ms * HZ / 1000);
-				dhd_os_spin_unlock(&dhd->pub, flags);
+					flags = dhd_os_spin_lock(&dhd->pub);
+					/* Count the tick for reference */
+					dhd->pub.tickcnt++;
+					/* Reschedule the watchdog */
+					if (dhd->wd_timer_valid)
+						mod_timer(&dhd->timer,
+							jiffies + msecs_to_jiffies(next_ms));
+					dhd_os_spin_unlock(&dhd->pub, flags);
+				}
+				dhd_os_sdunlock(&dhd->pub);
 			}
-			dhd_os_sdunlock(&dhd->pub);
 			DHD_OS_WAKE_UNLOCK(&dhd->pub);
 		} else {
 			break;

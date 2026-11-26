@@ -19,6 +19,8 @@
 #include <linux/pmic8058-pwm.h>
 #include <linux/hrtimer.h>
 #include <linux/i2c.h>
+#include <linux/leds.h>
+#include <linux/mutex.h>
 #include <mach/pmic.h>
 #include <mach/camera.h>
 #include <mach/gpio.h>
@@ -197,6 +199,95 @@ static int lm3561_mask_set(struct i2c_client *client,
 }
 
 static struct i2c_client *lm3561_client;
+#if defined(CONFIG_CAMERA_FLASH_LM3561)
+static DEFINE_MUTEX(lm3561_lock);
+static int lm3561_gpios_inited = 0;
+static int lm3561_led_en_gpio = 85;
+static int lm3561_flash_en_gpio = 84;
+
+static int lm3561_ensure_gpios(int en_pin, int flash_pin)
+{
+	int rc;
+	if (en_pin > 0) lm3561_led_en_gpio = en_pin;
+	if (flash_pin > 0) lm3561_flash_en_gpio = flash_pin;
+	if (lm3561_gpios_inited)
+		return 0;
+
+	rc = gpio_tlmm_config(GPIO_CFG(lm3561_led_en_gpio, 0, GPIO_CFG_OUTPUT,
+		GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+	if (rc < 0)
+		pr_err("lm3561: gpio_tlmm_config(%d) failed: %d\n", lm3561_led_en_gpio, rc);
+
+	rc = gpio_tlmm_config(GPIO_CFG(lm3561_flash_en_gpio, 0, GPIO_CFG_OUTPUT,
+		GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+	if (rc < 0)
+		pr_err("lm3561: gpio_tlmm_config(%d) failed: %d\n", lm3561_flash_en_gpio, rc);
+
+	lm3561_gpios_inited = 1;
+	return 0;
+}
+
+static void lm3561_set_gpio(int gpio, const char *label, int value)
+{
+	int req = gpio_request(gpio, label);
+	gpio_direction_output(gpio, value ? 1 : 0);
+	if (req >= 0)
+		gpio_free(gpio);
+}
+
+static void lm3561_torch_brightness_set(struct led_classdev *led_cdev,
+				enum led_brightness value)
+{
+	int rc;
+	u8 torch_lvl;
+
+	mutex_lock(&lm3561_lock);
+	if (!lm3561_client) {
+		pr_err("lm3561_torch: client not ready\n");
+		goto out;
+	}
+
+	lm3561_ensure_gpios(soc_led_en_pin, soc_led_flash_en_pin);
+
+	if (value == LED_OFF) {
+		rc = lm3561_mask_set(lm3561_client, CONFIGURATION1_REG, 0xFF, 0x6A);
+		if (rc < 0)
+			pr_err("lm3561_torch: disable failed (%d)\n", rc);
+		lm3561_set_gpio(lm3561_led_en_gpio, "lm3561_torch", 0);
+		lm3561_set_gpio(lm3561_flash_en_gpio, "lm3561_strobe", 0);
+	} else {
+		if (value == 1)
+			torch_lvl = 0x04;
+		else if (value == 3 || value >= 128)
+			torch_lvl = 0x06;
+		else {
+			torch_lvl = (u8)(((int)value * 6 + 127) / 255);
+			if (torch_lvl < 1) torch_lvl = 1;
+			if (torch_lvl > 6) torch_lvl = 6;
+		}
+		lm3561_set_gpio(lm3561_flash_en_gpio, "lm3561_strobe", 0);
+		rc = lm3561_mask_set(lm3561_client, CONFIGURATION1_REG, 0x84, 0x84);
+		if (rc < 0) {
+			pr_err("lm3561_torch: enable config failed (%d)\n", rc);
+			goto out;
+		}
+		rc = lm3561_mask_set(lm3561_client, TORCH_BRIGHTNESS_REG, 0x07, torch_lvl);
+		if (rc < 0) {
+			pr_err("lm3561_torch: set brightness failed (%d)\n", rc);
+			goto out;
+		}
+		lm3561_set_gpio(lm3561_led_en_gpio, "lm3561_torch", 1);
+	}
+out:
+	mutex_unlock(&lm3561_lock);
+}
+
+static struct led_classdev lm3561_torch_led = {
+	.name = "flashlight",
+	.max_brightness = 255,
+	.brightness_set = lm3561_torch_brightness_set,
+};
+#endif /* CONFIG_CAMERA_FLASH_LM3561 */
 
 static const struct i2c_device_id lm3561_i2c_id[] = {
 	{"lm3561", 0},
@@ -215,6 +306,12 @@ static int lm3561_i2c_probe(struct i2c_client *client,
 	}
 
 	lm3561_client = client;
+#if defined(CONFIG_CAMERA_FLASH_LM3561)
+	rc = led_classdev_register(&client->dev, &lm3561_torch_led);
+	if (rc)
+		pr_err("lm3561_probe: led_classdev_register failed: %d\n", rc);
+	rc = 0;
+#endif
 
 	printk("lm3561_probe successed! rc = %d\n", rc);
 	return 0;
@@ -223,6 +320,15 @@ probe_failure:
 	pr_err("lm3561_probe failed! rc = %d\n", rc);
 	return rc;
 }
+
+#if defined(CONFIG_CAMERA_FLASH_LM3561)
+static int __exit lm3561_i2c_remove(struct i2c_client *client)
+{
+	led_classdev_unregister(&lm3561_torch_led);
+	lm3561_client = NULL;
+	return 0;
+}
+#endif
 
 static struct i2c_driver lm3561_i2c_driver = {
 	.id_table = lm3561_i2c_id,
@@ -1277,6 +1383,18 @@ error:
 	return rc;
 }
 EXPORT_SYMBOL(msm_soc_torch_flash_off);
+
+static int __init lm3561_torch_init(void)
+{
+	int rc = 0;
+	if (!lm3561_client) {
+		rc = i2c_add_driver(&lm3561_i2c_driver);
+		if (rc < 0)
+			pr_err("lm3561_torch_init: i2c_add_driver failed: %d\n", rc);
+	}
+	return 0;
+}
+late_initcall(lm3561_torch_init);
 /*MTD-MM-SL-SupportFlash-01+} */
 /*MTD-MM-SL-SupportFlash-02*} */
 

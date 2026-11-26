@@ -875,12 +875,12 @@ static struct kgsl_device_platform_data kgsl_3d0_pdata = {
 			.bus_freq = 0,
 		},
 	},
-	.init_level = 0,
+	.init_level = 1,
 	.num_levels = 3,
 	.set_grp_async = set_grp_xbar_async,
-	.idle_timeout = HZ,
+	.idle_timeout = HZ / 5,
 	.strtstp_sleepwake = true,
-	.nap_allowed = false,
+	.nap_allowed = true,
 	.clk_map = KGSL_CLK_CORE | KGSL_CLK_IFACE | KGSL_CLK_MEM,
 };
 
